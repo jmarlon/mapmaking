@@ -1,0 +1,138 @@
+---
+title: "Make a choropleth map using the sf approach in R"
+#author: "JRM"
+date: 11/6/2021
+output: html_document
+---
+
+```{r setup, include=FALSE, warning = FALSE, message=FALSE}
+## Plot a state-level choropleth map displaying % of people who believe GW is happening 
+knitr::opts_chunk$set(echo = TRUE)
+
+# TODO:
+# - add inset maps
+# - refine breaks/classes
+
+```
+
+### 1. Load and prepare cartographic data
+
+Choropleth maps are maps where some quantity is used to color geographic areas on the map. They are based on polygon layers and cannot be constructed directly from point locations (e.g. specific addresses or latitude/longitude coordinates) or from images (e.g. satellite data). Choropleth maps are often used to map data that vary by country, state, county, or other aggregated unit (e.g. dominant vegetation types in a biome or watershed, demographic variables, or political outcomes).
+
+Usually you start with a dataset that has a variable you want to map, for example, percent of a population in each state under age 30. This would be your "attribute" file. You then need to find a geographic file, often a shapefile, that has the boundaries of your map, e.g., state outlines for the US. The next task is to find the name of the variable in the attribute file and the corresponding name of the variable in the shapefile that is common (or could be common) to both files. Then you need to merge them using that shared variable. Once all that is complete you can begin to start creating the actual map.  
+
+Resources for making choropleth maps:
+https://cengel.github.io/R-spatial/intro.html
+https://r-spatial.github.io/sf/reference/tidyverse.html
+https://cfss.uchicago.edu/notes/vector-maps/
+
+
+```{r read-data, include=TRUE, warning = FALSE, message=FALSE}
+
+require(pacman)  # Gives a confirmation message.
+pacman::p_load(pacman, sf, sp, rgdal, raster, rgeos, dplyr, stringr, classInt, RColorBrewer, ggplot2, ggplot2, tidyverse, rgdal, ggthemes) #ggmap, tmap, leaflet,
+
+# DO ONCE for tutorial data only
+#download.file("http://bit.ly/R-spatial-data", "R-spatial-data.zip")
+#unzip("R-spatial-data.zip", exdir = "data")
+
+# read in geometries
+state_sf <- st_read("../gis/cb_2018_us_state_5m/")
+
+str(state_sf)
+
+# read "crosswalk" index that connects the attribute file to the geographic boundary file via a shared variable
+
+load("../gis/geoids.Rda")
+
+#geoids <- load("gis/geoids.Rda")
+fips <- df.all %>% filter(GeoType == "State") 
+fips$GeoName <- droplevels(fips$GeoName)
+#head(fips)
+
+# insert leading 0s where appropriate
+fips$GEOID <- str_pad(fips$GEOID, 2, pad = "0") # uses library(stringr)
+#dput(fips$GeoName)
+fips$ppstaten <- c("AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "DC", 
+"FL", "GA", "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD", 
+"MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ", 
+"NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC", 
+"SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY")
+
+#View(fips)
+
+```
+
+
+### 2. Merge data attributes that you want to map
+
+```{r, include=TRUE, warning = FALSE, message=FALSE}
+
+opinions <- read.csv("../surveydata/ccam_flooding.csv")
+names(opinions) <- tolower(names(opinions))
+flood <- opinions %>% dplyr::select(caseid, wave, ppreg9, ppstaten, x948w)
+
+flood.summary <- flood %>% 
+  dplyr::group_by(ppstaten,x948w) %>%
+  dplyr::summarize(N = n()) %>%
+  #dplyr::mutate(freq = N/sum(N), pct = round((freq*100), 2)) %>%
+  dplyr::mutate(freq = N/sum(N), pct = (freq*100)) %>%
+  dplyr::filter(x948w == "Very worried") %>%
+  dplyr::summarize(vw_flood = sum(pct))
+
+f.map.pct <- left_join(fips,flood.summary)
+f.map.pct <- f.map.pct %>% replace_na(list(vw_flood = 0))
+plot(f.map.pct$vw_flood)
+
+```
+
+### 3. Construct US map
+
+```{r, include=TRUE, warning = FALSE, message=FALSE}
+
+# Merge survey data into the sf object
+
+# Do not do this - it does not produce an 'sf' object:
+# state_sf <- left_join(state_sf, f.map.pct, by = c("STUSPS" = "ppstaten"))
+
+# Do this instead:
+state_sf_merged <- merge(state_sf, f.map.pct, by.x = "STUSPS", by.y = "ppstaten")
+
+
+p <- ggplot(state_sf_merged) + 
+  geom_sf(aes(fill=vw_flood)) 
+
+# remove AK, HI, PR
+state_sf_merged <- state_sf_merged %>% filter(STUSPS!= c("AK", "PR", "HI"),)
+
+# get quantile breaks. # Can add .00001 offset to catch the lowest value
+breaks_qt <- classIntervals(c(min(state_sf_merged$vw_flood), state_sf_merged$vw_flood), n = 5, style = "quantile")
+breaks_qt
+
+vwf_sf <- mutate(state_sf_merged, vw_flood_cat = cut(vw_flood, breaks_qt$brks)) 
+#View(vwf_sf)
+p <- ggplot(vwf_sf) + 
+  geom_sf(aes(fill=vw_flood_cat), color="white", size = 0.2) +
+  scale_fill_brewer(palette = "OrRd") +
+  coord_sf(crs = "+proj=aea +lat_1=25 +lat_2=50 +lon_0=-100") +
+  ggtitle("Percent of people 'very worried' about flooding") +
+  theme_tufte() 
+
+p
+
+ggsave("../output/veryworried_flooding2.png", width=8.76, height=5.74,  dpi=300) 
+
+
+# CLEAN UP #################################################
+
+# Clear packages
+p_unload(dplyr) # Clear specific packages
+p_unload(all)  # Easier: clears all add-ons
+detach("package:datasets", unload = TRUE)  # For base
+
+# Clear console
+cat("\014")  # ctrl+L
+
+
+```
+
