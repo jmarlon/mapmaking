@@ -1,3 +1,5 @@
 # mapmaking
 
-This repository contains an example script that produces a choropleth map from some survey data. It uses the sf or simple features package to prepare and construct the map.
+This repository contains:
+1) an example script that produces a choropleth map from some survey data. It uses the sf or simple features package to prepare and construct the map.
+2) a script that produces county-level percentages of African Americans from 2020 census data. This data could be used in Datawrapper (or R) to create choropleth maps.
